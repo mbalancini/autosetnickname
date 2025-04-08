@@ -15,13 +15,19 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 
-# Verifica si el bot tiene permisos y rol suficiente para cambiar el apodo
+# Verifica si el bot puede cambiar el apodo del usuario
 async def puede_cambiar_apodo(bot_member, target_member):
-	#	guild = target_member.guild
+	guild = target_member.guild
 
+	# ⚠️ Discord no permite cambiar el apodo del dueño del servidor
+	if target_member == guild.owner:
+		return False, "❌ No puedo cambiar el apodo del dueño del servidor. Discord no lo permite."
+
+	# ¿El bot tiene el permiso Manage Nicknames?
 	if not bot_member.guild_permissions.manage_nicknames:
 		return False, "❌ No tengo el permiso `Manage Nicknames` para cambiar apodos."
 
+	# ¿Está el rol del bot por encima del del usuario?
 	if bot_member.top_role <= target_member.top_role:
 		return False, "⚠️ Mi rol no es suficientemente alto para cambiar tu apodo."
 
