@@ -1,112 +1,151 @@
 import discord
 from discord.ext import commands
-import asyncio
+from discord.ui import View, Button, Modal, TextInput
 import os
 from dotenv import load_dotenv
 from keep_alive import keep_alive
 
-# Cargar variables del .env
 load_dotenv()
 
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# Verifica si el bot puede cambiar el apodo del usuario
+# Validaciones de permisos y roles
 async def puede_cambiar_apodo(bot_member, target_member):
 	guild = target_member.guild
 
-	# ⚠️ Discord no permite cambiar el apodo del dueño del servidor
 	if target_member == guild.owner:
 		return False, "❌ No puedo cambiar el apodo del dueño del servidor. Discord no lo permite."
 
-	# ¿El bot tiene el permiso Manage Nicknames?
 	if not bot_member.guild_permissions.manage_nicknames:
 		return False, "❌ No tengo el permiso `Manage Nicknames` para cambiar apodos."
 
-	# ¿Está el rol del bot por encima del del usuario?
 	if bot_member.top_role <= target_member.top_role:
 		return False, "⚠️ Mi rol no es suficientemente alto para cambiar tu apodo."
 
 	return True, None
 
 
+# Modal (formulario)
+class AliasModal(Modal):
+
+	def __init__(self, user):
+		super().__init__(title="Formulario de Alias")
+		self.user = user
+
+		self.nombre = TextInput(label="Nombre", placeholder="Escribe tu nombre")
+		self.apellido = TextInput(label="Apellido",
+		                          placeholder="Escribe tu apellido")
+
+		self.add_item(self.nombre)
+		self.add_item(self.apellido)
+
+	async def on_submit(self, interaction: discord.Interaction):
+		nombre = self.nombre.value.strip()
+		apellido = self.apellido.value.strip()
+
+		if not nombre:
+			await interaction.response.send_message(
+			    "⚠️ El nombre no puede estar vacío.", ephemeral=True)
+			return
+
+		if not apellido:
+			await interaction.response.send_message(
+			    "⚠️ El apellido no puede estar vacío.", ephemeral=True)
+			return
+
+		nuevo_alias = f"{nombre} {apellido}"
+
+		# Mostrar botones para confirmar o reintentar
+		view = ConfirmAliasView(self.user, nuevo_alias)
+		embed = discord.Embed(
+		    title="Confirmar alias",
+		    description=f"¿Querés usar el alias:\n**{nuevo_alias}**?",
+		    color=discord.Color.blue(),
+		)
+
+		await interaction.response.send_message(embed=embed,
+		                                        view=view,
+		                                        ephemeral=True)
+
+
+# Botones para confirmar o cancelar alias
+class ConfirmAliasView(View):
+
+	def __init__(self, user, alias):
+		super().__init__(timeout=60)
+		self.user = user
+		self.alias = alias
+
+	@discord.ui.button(label="✅ Sí", style=discord.ButtonStyle.success)
+	async def confirmar(self, interaction: discord.Interaction, button: Button):
+		try:
+			await self.user.edit(nick=self.alias)
+			await interaction.response.send_message(
+			    f"✅ Tu alias ha sido cambiado a `{self.alias}`", ephemeral=True)
+		except discord.Forbidden:
+			await interaction.response.send_message(
+			    "❌ No tengo permisos para cambiar tu alias.", ephemeral=True)
+
+		self.stop()
+
+	@discord.ui.button(label="🔁 Reintentar", style=discord.ButtonStyle.secondary)
+	async def reintentar(self, interaction: discord.Interaction, button: Button):
+		modal = AliasModal(self.user)
+		await interaction.response.send_modal(modal)
+		self.stop()
+
+	@discord.ui.button(label="❌ Cancelar", style=discord.ButtonStyle.danger)
+	async def cancelar(self, interaction: discord.Interaction, button: Button):
+		await interaction.response.send_message("❌ Operación cancelada.",
+		                                        ephemeral=True)
+		self.stop()
+
+
+# Vista con botón para abrir el modal
+class AliasStartView(View):
+
+	def __init__(self, user):
+		super().__init__(timeout=60)
+		self.user = user
+
+	@discord.ui.button(label="📝 Ingresar nombre y apellido",
+	                   style=discord.ButtonStyle.primary)
+	async def abrir_modal(self, interaction: discord.Interaction, button: Button):
+		if interaction.user != self.user:
+			await interaction.response.send_message("⛔ Solo vos podés usar este botón.",
+			                                        ephemeral=True)
+			return
+
+		modal = AliasModal(self.user)
+		await interaction.response.send_modal(modal)
+
+
 @bot.command()
 async def alias(ctx):
 	user = ctx.author
-	channel = ctx.channel
-	guild = ctx.guild
-	bot_member = guild.me
-
-	def check(m):
-		return m.author == user and m.channel == channel
+	bot_member = ctx.guild.me
 
 	puede, error = await puede_cambiar_apodo(bot_member, user)
 	if not puede:
 		await ctx.send(error)
 		return
 
-	intentos = 0
-	max_intentos = 3
-
-	while intentos < max_intentos:
-		try:
-			await ctx.send("👋 Hola, ¿cuál es tu **nombre**?")
-			nombre = await bot.wait_for("message", check=check, timeout=60)
-
-			await ctx.send("¿Y tu **apellido**?")
-			apellido = await bot.wait_for("message", check=check, timeout=60)
-
-			nuevo_alias = f"{nombre.content} {apellido.content}"
-
-			await ctx.send(
-			    f"❓ ¿Querés usar el alias **{nuevo_alias}**? Responde con `S` para sí o `N` para no."
-			)
-
-			confirmacion = await bot.wait_for("message",
-			                                  check=check,
-			                                  timeout=30)
-			respuesta = confirmacion.content.strip().lower()
-
-			if respuesta == "s":
-				await user.edit(nick=nuevo_alias)
-				await ctx.send(f"✅ ¡Listo! Tu nuevo alias es: `{nuevo_alias}`")
-				break
-			elif respuesta == "n":
-				intentos += 1
-				await ctx.send(
-				    f"🔁 Ok, intentemos de nuevo. Intento {intentos}/{max_intentos}.\n"
-				)
-			else:
-				intentos += 1
-				await ctx.send(
-				    f"❌ Respuesta inválida. Usá `S` o `N`. Intento {intentos}/{max_intentos}.\n"
-				)
-
-		except asyncio.TimeoutError:
-			await ctx.send(
-			    "⏰ Se acabó el tiempo. Intenta otra vez cuando quieras.")
-			break
-		except discord.Forbidden:
-			await ctx.send(
-			    "❌ No tengo permisos suficientes para cambiar tu apodo.")
-			break
-		except Exception as e:
-			await ctx.send(f"⚠️ Ocurrió un error inesperado: {e}")
-			break
-
-	if intentos >= max_intentos:
-		await ctx.send("🚫 Demasiados intentos fallidos. Intentalo más tarde.")
+	# Abrir directamente el formulario
+	modal = AliasModal(user)
+	await ctx.send("📝 Abriendo formulario para cambiar tu alias...",
+	               delete_after=5)
+	await ctx.send_modal(modal)
 
 
-# Mantiene vivo el bot en Replit
+# Mantener activo el bot en Replit
 keep_alive()
 
-# Ejecutar el bot
 token = os.getenv("TOKEN")
 if not token:
-	raise ValueError("❌ TOKEN no encontrado. Por favor, notifique a un ADMIN")
+	raise ValueError("❌ TOKEN no encontrado en .env")
 bot.run(token)
